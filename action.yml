@@ -59,6 +59,32 @@ inputs:
       in place via rcedit, no compile needed). Windows-only; ignored on other platforms.
     required: false
     default: ''
+  android-app-name:
+    description: >-
+      [roves] `--android-app-name <NAME>`: override the Android app's launcher label. Requires
+      `android: 'true'`. Defaults to content-dir's own manifest.webmanifest/manifest.json/
+      site.webmanifest `short_name` (falling back to `name`), or Roves' own default label if
+      neither the manifest nor this input provide one.
+    required: false
+    default: ''
+  android-orientation:
+    description: >-
+      [roves] `--android-orientation <VALUE>`: override the Android app's locked screen
+      orientation (standard web app manifest `orientation` vocabulary: any, natural,
+      landscape, landscape-primary, landscape-secondary, portrait, portrait-primary,
+      portrait-secondary). Requires `android: 'true'`. Defaults to content-dir's own manifest
+      `orientation` field, or unlocked (OS/sensor decides) if neither the manifest nor this
+      input set one.
+    required: false
+    default: ''
+  android-theme-color:
+    description: >-
+      [roves] `--android-theme-color <COLOR>`: override the Android app's status bar color
+      (e.g. "#ffffff"). Requires `android: 'true'`. Defaults to content-dir's own manifest
+      `theme_color` field, or leaves the status bar at its normal theme color if neither the
+      manifest nor this input set one.
+    required: false
+    default: ''
 
   # ── `mach build` (stock Servo flags — none of these are Roves-specific) ───────
   release:
@@ -122,7 +148,12 @@ inputs:
     required: false
     default: 'false'
   android:
-    description: '[servo] `--android`: build for the default Android target. Not currently a supported Roves platform — see the engine README.'
+    description: >-
+      [servo] `--android`: build for the default Android target. Early/experimental — debug
+      .apk only, advanced-mode only (no prebuilt Android shell is published to download), see
+      the engine README's "Supported platforms" table. Also controls `mach bundle`'s own
+      `--android` in the "mach bundle" step below, so a game's content actually lands in the
+      built .apk instead of the desktop bundling path running against a `.so`.
     required: false
     default: 'false'
   ohos:
@@ -307,6 +338,19 @@ runs:
           exit 1
         fi
 
+    # Unlike icon-png/icon-ico (which apply to every platform `mach bundle` supports and so
+    # were deliberately left off the base-mode incompatibility check above), these three are
+    # meaningless without android='true' — a desktop bundle has no launcher label/screen
+    # orientation/status bar to set. This runs regardless of advanced-mode/base mode, since
+    # it's checking a different thing than that step (whether these inputs make sense at all
+    # for the target platform, not whether the engine was compiled from source).
+    - name: Validate android-* bundle inputs require android='true'
+      if: inputs.android != 'true' && (inputs.android-app-name != '' || inputs.android-orientation != '' || inputs.android-theme-color != '')
+      shell: bash
+      run: |
+        echo "::error::android-app-name/android-orientation/android-theme-color require android: 'true' -- they configure the Android app's launcher label/screen orientation/status bar, which don't exist on a desktop bundle."
+        exit 1
+
     - name: Resolve paths (content-dir/icons are relative to your repo, not the engine checkout)
       id: paths
       shell: bash
@@ -338,7 +382,7 @@ runs:
       uses: actions/checkout@v4
       with:
         repository: DRincs-Productions/roves
-        ref: v0.4.6
+        ref: v0.4.17
         path: roves-src
 
     # mach's own command loader (python/mach_bootstrap.py's MACH_MODULES list) always loads
@@ -367,7 +411,7 @@ runs:
         git -C /tmp/roves-action-wpt-tools-src config core.sparseCheckout true
         git -C /tmp/roves-action-wpt-tools-src sparse-checkout init --cone
         git -C /tmp/roves-action-wpt-tools-src sparse-checkout set tests/wpt/tests/tools
-        git -C /tmp/roves-action-wpt-tools-src fetch --depth 1 --filter=blob:none origin v0.4.0
+        git -C /tmp/roves-action-wpt-tools-src fetch --depth 1 --filter=blob:none origin v0.5.0
         git -C /tmp/roves-action-wpt-tools-src checkout FETCH_HEAD
         mkdir -p tests/wpt
         cp -r /tmp/roves-action-wpt-tools-src/tests/wpt/tests tests/wpt/tests
@@ -385,6 +429,81 @@ runs:
       shell: bash
       working-directory: roves-src
       run: rustup show
+
+    # Android cross builds only run on Linux/macOS hosts -- enforced by
+    # python/servo/platform/build_target.py's AndroidTarget on the engine side, independent of
+    # anything this action does. (A second, narrower Windows gap -- the engine's own Gradle
+    # project invoking `ndk-build` with no `.cmd` fallback -- was fixed upstream as of engine
+    # tag v0.4.11, but that alone doesn't lift this restriction: `mach build --android` on a
+    # Windows host has never been exercised in the engine's own CI, only reasoned about at the
+    # code level, see the engine repo's own TODO.md.) Fail fast with a clear reason instead of
+    # a confusing failure deep inside `mach build`/Gradle.
+    - name: Reject android='true' on Windows
+      if: inputs.android == 'true' && runner.os == 'Windows'
+      shell: bash
+      run: |
+        echo "::error::android: 'true' isn't supported when this action runs on a Windows runner -- Servo's own Android cross-compile support is Linux/macOS-host-only (python/servo/platform/build_target.py's AndroidTarget, unrelated to this action). Use a Linux or macOS runner for an android: 'true' job."
+        exit 1
+
+    # Mirrors the identical setup in the engine repo's own .github/workflows/android.yml --
+    # see that file's own comments for the full reasoning behind each choice below
+    # (cmdline-tools installed fresh rather than trusting whatever's preinstalled, NDK/
+    # platform package versions resolved dynamically rather than hardcoded). Keep both in
+    # sync if either ever changes.
+    - name: Install Android SDK cmdline-tools (android='true' only)
+      if: inputs.android == 'true'
+      shell: bash
+      run: |
+        mkdir -p "$HOME/android-sdk/cmdline-tools"
+        curl -fsSL -o /tmp/cmdline-tools.zip \
+          "https://dl.google.com/android/repository/commandlinetools-linux-15859902_latest.zip"
+        unzip -q /tmp/cmdline-tools.zip -d /tmp/cmdline-tools-extract
+        rm /tmp/cmdline-tools.zip
+        mv /tmp/cmdline-tools-extract/cmdline-tools "$HOME/android-sdk/cmdline-tools/latest"
+        echo "ANDROID_SDK_ROOT=$HOME/android-sdk" >> "$GITHUB_ENV"
+        echo "ANDROID_HOME=$HOME/android-sdk" >> "$GITHUB_ENV"
+        echo "$HOME/android-sdk/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+        echo "$HOME/android-sdk/platform-tools" >> "$GITHUB_PATH"
+
+    - name: Install Android SDK components + NDK r28 (android='true' only)
+      if: inputs.android == 'true'
+      shell: bash
+      env:
+        # support/android/apk/servoapp/build.gradle.kts's `android {}` block, engine-side --
+        # keep in sync with that file (and the engine's own android.yml, which targets the
+        # same values).
+        ANDROID_COMPILE_SDK: '37'
+        ANDROID_BUILD_TOOLS: '36.0.0'
+      run: |
+        yes | sdkmanager --sdk_root="$ANDROID_SDK_ROOT" --channel=3 --licenses >/dev/null || true
+
+        PLATFORM_PKG=$(sdkmanager --sdk_root="$ANDROID_SDK_ROOT" --channel=3 --list 2>/dev/null \
+          | grep -oE "platforms;android-${ANDROID_COMPILE_SDK}(\.[0-9]+)?(-ext[0-9]+)?" \
+          | grep -v -- '-beta\|-rc' | sort -V | tail -1)
+        if [ -z "$PLATFORM_PKG" ]; then
+          echo "::error::no platforms;android-${ANDROID_COMPILE_SDK}* package advertised by sdkmanager --list"
+          exit 1
+        fi
+        echo "Installing $PLATFORM_PKG"
+        sdkmanager --sdk_root="$ANDROID_SDK_ROOT" --channel=3 "platform-tools" "$PLATFORM_PKG" "build-tools;${ANDROID_BUILD_TOOLS}"
+
+        NDK_PKG=$(sdkmanager --sdk_root="$ANDROID_SDK_ROOT" --channel=3 --list 2>/dev/null | grep -oE 'ndk;28\.[0-9]+\.[0-9]+' | sort -V | tail -1)
+        if [ -z "$NDK_PKG" ]; then
+          echo "::error::no NDK r28.x package advertised by sdkmanager --list -- Servo currently only supports NDK r28, see the engine's own build_target.py"
+          exit 1
+        fi
+        echo "Installing $NDK_PKG"
+        sdkmanager --sdk_root="$ANDROID_SDK_ROOT" --channel=3 "$NDK_PKG"
+
+        NDK_VERSION="${NDK_PKG#ndk;}"
+        echo "ANDROID_NDK_ROOT=$ANDROID_SDK_ROOT/ndk/$NDK_VERSION" >> "$GITHUB_ENV"
+
+    - name: Setup JDK (Gradle/AGP toolchain, android='true' only)
+      if: inputs.android == 'true'
+      uses: actions/setup-java@v4
+      with:
+        distribution: 'temurin'
+        java-version: '21'
 
     # Windows: mach's own bootstrap shells out to the GStreamer MSI installer via a UAC
     # elevation prompt, which just hangs forever with no interactive session — skip it with
@@ -433,7 +552,7 @@ runs:
 
         dest="${{ github.workspace }}/roves-prebuilt-shell"
         mkdir -p "$dest"
-        url="https://github.com/DRincs-Productions/roves/releases/download/v0.4.6/roves_shell_${platform}${suffix}.zip"
+        url="https://github.com/DRincs-Productions/roves/releases/download/v0.4.17/roves_shell_${platform}${suffix}.zip"
         echo "Downloading $url"
         curl -fSL "$url" -o "$dest/shell.zip"
 
@@ -484,7 +603,15 @@ runs:
         [ -n "${{ inputs.flavor }}" ] && args+=(--flavor "${{ inputs.flavor }}")
         [ "${{ inputs.verbose }}" = "true" ] && args+=(--verbose)
         [ "${{ inputs.very-verbose }}" = "true" ] && args+=(--very-verbose)
-        [ "${{ inputs.no-package }}" = "true" ] && args+=(--no-package)
+        # android='true' always forces --no-package too, regardless of the no-package input's
+        # own value: the "mach bundle" step below always runs next and does its own Gradle
+        # invocation once the game's real content is available -- letting `mach build`'s
+        # auto-package dispatch run first (see the engine's build_commands.py) would just
+        # build an empty-content .apk via Gradle, then immediately rebuild it again with real
+        # content, for no benefit.
+        if [ "${{ inputs.no-package }}" = "true" ] || [ "${{ inputs.android }}" = "true" ]; then
+          args+=(--no-package)
+        fi
 
         echo "./mach build ${args[*]} ${{ inputs.build-params }}"
         ./mach build "${args[@]}" ${{ inputs.build-params }}
@@ -521,6 +648,14 @@ runs:
           [ "${{ inputs.coverage }}" = "true" ] && args+=(--coverage)
           [ -n "${{ inputs.bin }}" ] && args+=(--bin "${{ inputs.bin }}")
           [ -n "${{ inputs.nightly }}" ] && args+=(--nightly "${{ inputs.nightly }}")
+          # `mach build`/`mach bundle` are separate `./mach` invocations (separate processes)
+          # -- self.target isn't remembered between them, so bundle needs --android passed
+          # again here too, exactly like the build step above, or it would silently resolve
+          # servo_binary against the host desktop target instead of the just-built .so (see
+          # the engine's post_build_commands.py `bundle` decorator comment for why this needs
+          # --android specifically, not e.g. --target, to also pick the right _bundle_android
+          # code path).
+          [ "${{ inputs.android }}" = "true" ] && args+=(--android)
         fi
 
         while IFS= read -r glob; do
@@ -548,6 +683,9 @@ runs:
         # passed unconditionally whenever set; no need to gate on runner.os here too.
         [ -n "${{ steps.paths.outputs.icon-png-abs }}" ] && args+=(--icon-png "${{ steps.paths.outputs.icon-png-abs }}")
         [ -n "${{ steps.paths.outputs.icon-ico-abs }}" ] && args+=(--icon-ico "${{ steps.paths.outputs.icon-ico-abs }}")
+        [ -n "${{ inputs.android-app-name }}" ] && args+=(--android-app-name "${{ inputs.android-app-name }}")
+        [ -n "${{ inputs.android-orientation }}" ] && args+=(--android-orientation "${{ inputs.android-orientation }}")
+        [ -n "${{ inputs.android-theme-color }}" ] && args+=(--android-theme-color "${{ inputs.android-theme-color }}")
 
         echo "./mach bundle ${args[*]} ${{ inputs.bundle-params }}"
         ./mach bundle "${args[@]}" ${{ inputs.bundle-params }}
