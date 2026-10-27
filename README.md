@@ -1,5 +1,10 @@
 # Roves GitHub Action
 
+The prebuilt shell and source checkout target Roves **v0.7.13**, including native V8
+global-property lookup, worker intrinsic lookup improvements, and safe reporting of
+exceptions without source positions. Whole-game CPU gains are still being measured.
+Action v0.1.9 publishes this pin through the floating `@v0` release alias.
+
 This GitHub Action packages your already-built web content, using
 [Roves](https://github.com/DRincs-Productions/roves) — a customized Servo fork used as a
 runtime for shipping web-based games as real native apps instead of as a browser tab — into a
@@ -355,7 +360,8 @@ save-data folder that shouldn't be compressed:
     # default: false
     with-debug-assertions: false
 
-    # Build mozjs with debug assertions ([servo] `--debug-mozjs`).
+    # Deprecated ([servo] `--debug-mozjs`): built mozjs (SpiderMonkey) with debug assertions;
+    # ignored by engine releases that run JavaScript on V8.
     #
     # default: false
     debug-mozjs: false
@@ -404,12 +410,6 @@ save-data folder that shouldn't be compressed:
     #
     # default: false
     ios: false
-
-    # Build for the default OpenHarmony target ([servo] `--ohos`). Not a supported Roves
-    # platform yet.
-    #
-    # default: false
-    ohos: false
 
     # Use the arm64 Windows target instead of x64 ([servo] `--win-arm64`).
     #
@@ -643,7 +643,7 @@ Every input that only exists to control *how the engine compiles* is incompatibl
 mode — a prebuilt shell has one fixed build configuration (a `--release` build, the real
 GStreamer media stack, no sanitizers), so `features` (besides `'steam'`, the one published
 variant), `target`, `media-stack`, every sanitizer/debug/`--use-crown`/`--coverage` flag,
-`android`/`ios`/`ohos`/`win-arm64`, `flavor`, `build-params`, `bin`, and
+`android`/`ios`/`win-arm64`, `flavor`, `build-params`, `bin`, and
 `nightly` all need `advanced-mode: 'true'` (see below) — setting any of them to a non-default
 value in base mode fails the run with a clear error rather than silently ignoring your input.
 Everything else — `content-dir`, `icon-png`/`icon-ico`, and all of `mach bundle`'s own inputs
@@ -673,6 +673,12 @@ available: cross-compile `target`, extra Cargo `features`, sanitizers, an explic
 the same in base mode — see above, nothing advanced-mode-specific about them anymore).
 The engine tag itself is still this action's own pinned version — not something you can point
 at an unreleased commit; if you need that, build against a fork of this action instead.
+
+The engine's `test.yml` also runs an SDL3 virtual-gamepad probe before packaging. That probe
+is engine CI only: this action has no matching step or input. In the engine workflow the
+Windows/Linux probe gates packaging and the Steam smoke test, while the macOS probe runs as a
+separate, visible job that does not gate them. Nothing about the inputs or outputs of this
+action changes because of that split.
 
 If your CI runs this often, either cache Cargo's registry/target directories yourself around
 this action (e.g. `actions/cache` keyed on this action's own version + your lockfile — this
@@ -715,3 +721,19 @@ Marketplace"** — a manual, web-UI-only step (requires org-owner permissions an
 publishing account) that this workflow deliberately doesn't attempt to automate. GitHub
 validates `action.yml`'s `name`/`description`/`icon`/`color` at that point (`description` in
 particular has a hard 125-character limit) — fix and re-release if it flags anything.
+
+
+The engine also has a separate `V8 migration checks` workflow for isolated scripting tests
+on Windows, Linux and macOS, with normal and JIT-less configurations. This development-only
+matrix also tests the smoke runner itself: failed assertions, incomplete reports, unexpected
+skips and missing Window/CSP/navigation checks fail validation. JIT-less Wasm and explicitly
+configured headless device exceptions are documented in the engine architecture wiki.
+This matrix does not change this action's pinned engine or game packaging options. Its
+debug-only V8 heap snapshot diagnostic (one removed-frame capture in Linux engine CI) is not
+enabled by this action and adds no inputs. Engine-wide
+contributor instructions are in [AGENTS.md](https://github.com/DRincs-Productions/roves/blob/main/AGENTS.md).
+
+The engine's separate `deno_core single-document probe` workflow is a development-only
+isolated experiment on Linux/Windows in normal and JIT-less modes. It does not change this
+action's inputs, pinned engine, packaging outputs or game runtime; deno_core is not adopted
+by the production engine through that probe.

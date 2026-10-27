@@ -13,7 +13,7 @@ sibling of the engine repo (`../roves` from here) on this machine.
 
 The user has given standing permission to push and run/watch CI
 autonomously across this whole ecosystem (this repo, `../roves`, `../roves-packmaster`/Packmaster,
-and the rest) without stopping to ask first — see `../roves/CLAUDE.md`'s "Standing
+and the rest) without stopping to ask first — see `../roves/AGENTS.md`'s "Standing
 authorization: autonomous CI/push/release loop" section for the full detail (report honestly
 if asked directly whether something's done; don't claim it prematurely, and this doesn't
 cover genuinely destructive actions outside the normal build/test/release loop).
@@ -23,7 +23,7 @@ a write call like re-running failed jobs will 403 by design, use a real `git pus
 empty commit, `git commit --allow-empty`, when retrying after a transient flake with no real
 code change) instead. Never persist it to a file or commit; re-export it fresh in every
 command that needs it (env vars don't survive across separate tool calls here); if it starts
-401ing, say so and ask for a fresh one. Full detail in `../roves/CLAUDE.md`.
+401ing, say so and ask for a fresh one. Full detail in `../roves/AGENTS.md`.
 
 ## CRITICAL: keep the pinned engine tag in `action.yml` current
 
@@ -44,35 +44,13 @@ engine's latest release, that's exactly the kind of drift this note exists to ca
 (a real commit, same care as any other default-changing change), don't assume someone else
 owns it.
 
-## CRITICAL: the "Fetch tests/wpt/tests/tools" step's hardcoded Servo tag
+## No more "Fetch tests/wpt/tests/tools" step
 
-`action.yml`'s "Checkout Roves engine source" step is followed by a "Fetch
-tests/wpt/tests/tools" step — a **third** hardcoded literal (`grep -n 'v0\.' action.yml` above
-only finds two) fetching a small sparse-checkout of `tests/wpt/tests/tools/` from upstream
-`servo/servo`, not from `DRincs-Productions/roves`. This is not optional cleanup: without it,
-every `mach build`/`mach bundle` call in this action crashes immediately with
-`ModuleNotFoundError: No module named 'localpaths'` — `mach`'s own command loader
-unconditionally imports WPT test tooling that lives under `tests/wpt/`, a directory the engine
-repo deliberately excludes from git (~1.3GB of WPT conformance tests). `mach bootstrap` has its
-own fast path that skips this import, which is exactly why this went unnoticed for so long:
-base mode's own "mach bootstrap" step is skipped too (`if: ... && advanced-mode == 'true'`),
-so nothing in this action ever exercised the crashing path until
-`.github/workflows/test.yml` (added to *this* repo, mirroring the engine's own rolling "test"
-release) actually ran base mode end-to-end against a real game's content and hit it on every
-platform. The engine repo's own `CLAUDE.md` had already predicted this exact gap ("mach needs
-tests/wpt/tests/tools/ to exist, even for build/bundle" — "and so would roves-action") before
-it was ever confirmed here.
-
-The tag passed to `git fetch ... origin v<TAG>` in that step (currently `v0.4.0`) is the
-**upstream Servo version** the pinned engine tag above is vendored from — see the engine
-repo's own `CUSTOMIZATIONS.md` top-of-file baseline version, *not* the `DRincs-Productions/roves`
-release tag (`v0.4.0`) tracked elsewhere in this file. These two versions move independently:
-bumping the pinned engine tag above to a new roves release does **not** by itself mean this
-Servo tag needs to change — only bump it when that new roves release was itself vendored from
-a different upstream Servo version (a rare, bigger upgrade — see the engine repo's own
-"Upgrading to a newer Servo version" section). Mirrors the identical workaround in the engine
-repo's own `release.yml` (`SERVO_TAG` env there) — if that value there is ever bumped, check
-whether this literal here needs to move too.
+`action.yml` used to sparse-checkout `tests/wpt/tests/tools/` from upstream `servo/servo`
+because the engine's `mach` imported WPT/tidy tooling on every command. The engine dropped that
+tooling (engine `CUSTOMIZATIONS.md`, 2026-10-14 "Remove unused upstream mach tooling"), so the
+step is gone. Only engine releases that contain that change work without it: the `roves-ref`
+pin must point at such a release.
 
 ## `advanced-mode`: design notes
 
